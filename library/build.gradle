@@ -1,6 +1,8 @@
 apply plugin: 'com.android.library'
 apply plugin: 'com.github.dcendents.android-maven'
 apply plugin: 'com.jfrog.bintray'
+apply plugin: 'com.jfrog.artifactory'
+apply plugin: 'maven-publish'
 
 version = "1.4.1"
 
@@ -10,14 +12,14 @@ group = "com.kyleduo.switchbutton"
 
 android {
     compileSdkVersion 23
-    buildToolsVersion "22.0.1"
+    buildToolsVersion "23.0.3"
     resourcePrefix "SwitchButton__"
 
     defaultConfig {
         minSdkVersion 11
         targetSdkVersion 23
         versionCode 18
-        versionName "1.4.1"
+        versionName version
     }
     buildTypes {
         release {
@@ -101,5 +103,41 @@ bintray {
         vcsUrl = gitUrl
         licenses = ["Apache-2.0"]
         publish = true
+    }
+}
+
+// Repackage and publish to private artifactory
+def libraryGroupId = 'com.conouch.view'
+def libraryArtifactId = 'switch-button'
+def libraryVersion = '1.4.1'
+
+publishing {
+    publications {
+        aar(MavenPublication) {
+            groupId libraryGroupId
+            version libraryVersion
+            artifactId libraryArtifactId
+
+            artifact("$buildDir/outputs/aar/${project.name}-release.aar")
+        }
+    }
+}
+
+artifactory {
+    contextUrl = artifactory_context_url
+    publish {
+        repository {
+            repoKey = 'libs-release-local'
+
+            username = artifactory_username
+            password = artifactory_password
+        }
+        defaults {
+            publications('aar')
+            publishArtifacts = true
+
+            properties = ['qa.level': 'basic', 'q.os': 'android', 'dev.team': 'core']
+            publishPom = true
+        }
     }
 }

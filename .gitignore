@@ -22,3 +22,4 @@ gen/
 SwitchButton/gradle.properties
 .gradle
 build
+local.properties
