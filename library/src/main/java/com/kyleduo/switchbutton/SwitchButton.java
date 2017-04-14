@@ -20,6 +20,7 @@ import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.SoundEffectConstants;
 import android.view.ViewConfiguration;
@@ -81,6 +82,10 @@ public class SwitchButton extends CompoundButton {
 	private float mTextWidth;
 	private float mTextHeight;
 	private float mTextMarginH;
+	private boolean mAutoAdjustTextPosition = true;
+	// FIX #78,#85 : When restoring saved states, setChecked() called by super. So disable
+	// animation and event listening when restoring.
+	private boolean mRestoring = false;
 
 	private CompoundButton.OnCheckedChangeListener mChildOnCheckedChangeListener;
 
@@ -142,10 +147,11 @@ public class SwitchButton extends CompoundButton {
 		float backMeasureRatio = DEFAULT_BACK_MEASURE_RATIO;
 		int animationDuration = DEFAULT_ANIMATION_DURATION;
 		boolean fadeBack = true;
-		int tintColor = Integer.MIN_VALUE;
+		int tintColor = 0;
 		String textOn = null;
 		String textOff = null;
 		float textMarginH = density * DEFAULT_TEXT_MARGIN_DP;
+		boolean autoAdjustTextPosition = true;
 
 		TypedArray ta = attrs == null ? null : getContext().obtainStyledAttributes(attrs, R.styleable.SwitchButton);
 		if (ta != null) {
@@ -168,7 +174,20 @@ public class SwitchButton extends CompoundButton {
 			tintColor = ta.getColor(R.styleable.SwitchButton_kswTintColor, tintColor);
 			textOn = ta.getString(R.styleable.SwitchButton_kswTextOn);
 			textOff = ta.getString(R.styleable.SwitchButton_kswTextOff);
+			textMarginH = Math.max(textMarginH, backRadius / 2);
 			textMarginH = ta.getDimension(R.styleable.SwitchButton_kswTextMarginH, textMarginH);
+			autoAdjustTextPosition = ta.getBoolean(R.styleable.SwitchButton_kswAutoAdjustTextPosition, autoAdjustTextPosition);
+			ta.recycle();
+		}
+
+		// click
+		ta = attrs == null ? null : getContext().obtainStyledAttributes(attrs, new int[]{android.R.attr.focusable, android.R.attr.clickable});
+		if (ta != null) {
+			boolean focusable = ta.getBoolean(0, true);
+			//noinspection ResourceType
+			boolean clickable = ta.getBoolean(1, focusable);
+			setFocusable(focusable);
+			setClickable(clickable);
 			ta.recycle();
 		}
 
@@ -176,14 +195,21 @@ public class SwitchButton extends CompoundButton {
 		mTextOn = textOn;
 		mTextOff = textOff;
 		mTextMarginH = textMarginH;
+		mAutoAdjustTextPosition = autoAdjustTextPosition;
 
 		// thumb drawable and color
 		mThumbDrawable = thumbDrawable;
 		mThumbColor = thumbColor;
 		mIsThumbUseDrawable = mThumbDrawable != null;
 		mTintColor = tintColor;
-		if (mTintColor == Integer.MIN_VALUE) {
-			mTintColor = DEFAULT_TINT_COLOR;
+		if (mTintColor == 0) {
+			TypedValue typedValue = new TypedValue();
+			boolean found = getContext().getTheme().resolveAttribute(R.attr.colorAccent, typedValue, true);
+			if (found) {
+				mTintColor = typedValue.data;
+			} else {
+				mTintColor = DEFAULT_TINT_COLOR;
+			}
 		}
 		if (!mIsThumbUseDrawable && mThumbColor == null) {
 			mThumbColor = ColorUtils.generateThumbColorWithTintColor(mTintColor);
@@ -217,9 +243,6 @@ public class SwitchButton extends CompoundButton {
 		mFadeBack = fadeBack;
 
 		mProcessAnimator.setDuration(mAnimationDuration);
-
-		setFocusable(true);
-		setClickable(true);
 
 		// sync checked status
 		if (isChecked()) {
@@ -260,6 +283,8 @@ public class SwitchButton extends CompoundButton {
 			if (left < mTextWidth) {
 				minWidth += mTextWidth - left;
 			}
+		} else {
+			mTextWidth = 0;
 		}
 		minWidth = Math.max(minWidth, ceil(minWidth + mThumbMargin.left + mThumbMargin.right));
 		minWidth = Math.max(minWidth, minWidth + getPaddingLeft() + getPaddingRight());
@@ -288,6 +313,8 @@ public class SwitchButton extends CompoundButton {
 		if (onHeight != 0 || offHeight != 0) {
 			mTextHeight = Math.max(onHeight, offHeight);
 			minHeight = ceil(Math.max(minHeight, mTextHeight));
+		} else {
+			mTextHeight = 0;
 		}
 		minHeight = Math.max(minHeight, getSuggestedMinimumHeight());
 		minHeight = Math.max(minHeight, minHeight + getPaddingTop() + getPaddingBottom());
@@ -356,13 +383,19 @@ public class SwitchButton extends CompoundButton {
 		}
 
 		if (mOnLayout != null) {
-			float marginOnX = mBackRectF.left + (mBackRectF.width() - mThumbRectF.width() - mOnLayout.getWidth()) / 2 - mThumbMargin.left + mTextMarginH * (mThumbMargin.left > 0 ? 1 : -1);
+			float marginOnX = mBackRectF.left + (mBackRectF.width() - mThumbRectF.width() - mThumbMargin.right - mOnLayout.getWidth()) / 2 + (mThumbMargin.left < 0 ? mThumbMargin.left * -0.5f : 0);
+			if (!mIsBackUseDrawable && mAutoAdjustTextPosition) {
+				marginOnX += mBackRadius / 4;
+			}
 			float marginOnY = mBackRectF.top + (mBackRectF.height() - mOnLayout.getHeight()) / 2;
 			mTextOnRectF.set(marginOnX, marginOnY, marginOnX + mOnLayout.getWidth(), marginOnY + mOnLayout.getHeight());
 		}
 
 		if (mOffLayout != null) {
-			float marginOffX = mBackRectF.right - (mBackRectF.width() - mThumbRectF.width() - mOffLayout.getWidth()) / 2 + mThumbMargin.right - mOffLayout.getWidth() - mTextMarginH * (mThumbMargin.right > 0 ? 1 : -1);
+			float marginOffX = mBackRectF.right - (mBackRectF.width() - mThumbRectF.width() - mThumbMargin.left - mOffLayout.getWidth()) / 2 - mOffLayout.getWidth() + (mThumbMargin.right < 0 ? mThumbMargin.right * 0.5f : 0);
+			if (!mIsBackUseDrawable && mAutoAdjustTextPosition) {
+				marginOffX -= mBackRadius / 4;
+			}
 			float marginOffY = mBackRectF.top + (mBackRectF.height() - mOffLayout.getHeight()) / 2;
 			mTextOffRectF.set(marginOffX, marginOffY, marginOffX + mOffLayout.getWidth(), marginOffY + mOffLayout.getHeight());
 		}
@@ -375,12 +408,17 @@ public class SwitchButton extends CompoundButton {
 		// fade back
 		if (mIsBackUseDrawable) {
 			if (mFadeBack && mCurrentBackDrawable != null && mNextBackDrawable != null) {
-				int alpha = (int) (255 * (isChecked() ? getProcess() : (1 - getProcess())));
-				mCurrentBackDrawable.setAlpha(alpha);
-				mCurrentBackDrawable.draw(canvas);
+				// fix #75, 70%A + 30%B != 30%B + 70%A, order matters when mix two layer of different alpha.
+				// So make sure the order of on/off layers never change during slide from one endpoint to another.
+				Drawable below = isChecked() ? mCurrentBackDrawable : mNextBackDrawable;
+				Drawable above = isChecked() ? mNextBackDrawable : mCurrentBackDrawable;
+
+				int alpha = (int) (255 * getProcess());
+				below.setAlpha(alpha);
+				below.draw(canvas);
 				alpha = 255 - alpha;
-				mNextBackDrawable.setAlpha(alpha);
-				mNextBackDrawable.draw(canvas);
+				above.setAlpha(alpha);
+				above.draw(canvas);
 			} else {
 				mBackDrawable.setAlpha(255);
 				mBackDrawable.draw(canvas);
@@ -390,18 +428,22 @@ public class SwitchButton extends CompoundButton {
 				int alpha;
 				int colorAlpha;
 
+				// fix #75
+				int belowColor = isChecked() ? mCurrBackColor : mNextBackColor;
+				int aboveColor = isChecked() ? mNextBackColor : mCurrBackColor;
+
 				// curr back
-				alpha = (int) (255 * (isChecked() ? getProcess() : (1 - getProcess())));
-				colorAlpha = Color.alpha(mCurrBackColor);
+				alpha = (int) (255 * getProcess());
+				colorAlpha = Color.alpha(belowColor);
 				colorAlpha = colorAlpha * alpha / 255;
-				mPaint.setARGB(colorAlpha, Color.red(mCurrBackColor), Color.green(mCurrBackColor), Color.blue(mCurrBackColor));
+				mPaint.setARGB(colorAlpha, Color.red(belowColor), Color.green(belowColor), Color.blue(belowColor));
 				canvas.drawRoundRect(mBackRectF, mBackRadius, mBackRadius, mPaint);
 
 				// next back
 				alpha = 255 - alpha;
-				colorAlpha = Color.alpha(mNextBackColor);
+				colorAlpha = Color.alpha(aboveColor);
 				colorAlpha = colorAlpha * alpha / 255;
-				mPaint.setARGB(colorAlpha, Color.red(mNextBackColor), Color.green(mNextBackColor), Color.blue(mNextBackColor));
+				mPaint.setARGB(colorAlpha, Color.red(aboveColor), Color.green(aboveColor), Color.blue(aboveColor));
 				canvas.drawRoundRect(mBackRectF, mBackRadius, mBackRadius, mPaint);
 
 				mPaint.setAlpha(255);
@@ -484,7 +526,7 @@ public class SwitchButton extends CompoundButton {
 	@Override
 	public boolean onTouchEvent(MotionEvent event) {
 
-		if (!isEnabled() || !isClickable()) {
+		if (!isEnabled() || !isClickable() || !isFocusable()) {
 			return false;
 		}
 
@@ -598,7 +640,11 @@ public class SwitchButton extends CompoundButton {
 		if (isChecked() != checked) {
 			animateToState(checked);
 		}
-		super.setChecked(checked);
+		if (mRestoring) {
+			setCheckedImmediatelyNoEvent(checked);
+		} else {
+			super.setChecked(checked);
+		}
 	}
 
 	public void setCheckedNoEvent(final boolean checked) {
@@ -607,7 +653,7 @@ public class SwitchButton extends CompoundButton {
 		} else {
 			super.setOnCheckedChangeListener(null);
 			setChecked(checked);
-			setOnCheckedChangeListener(mChildOnCheckedChangeListener);
+			super.setOnCheckedChangeListener(mChildOnCheckedChangeListener);
 		}
 	}
 
@@ -617,7 +663,7 @@ public class SwitchButton extends CompoundButton {
 		} else {
 			super.setOnCheckedChangeListener(null);
 			setCheckedImmediately(checked);
-			setOnCheckedChangeListener(mChildOnCheckedChangeListener);
+			super.setOnCheckedChangeListener(mChildOnCheckedChangeListener);
 		}
 	}
 
@@ -627,7 +673,7 @@ public class SwitchButton extends CompoundButton {
 		} else {
 			super.setOnCheckedChangeListener(null);
 			toggle();
-			setOnCheckedChangeListener(mChildOnCheckedChangeListener);
+			super.setOnCheckedChangeListener(mChildOnCheckedChangeListener);
 		}
 	}
 
@@ -637,7 +683,7 @@ public class SwitchButton extends CompoundButton {
 		} else {
 			super.setOnCheckedChangeListener(null);
 			toggleImmediately();
-			setOnCheckedChangeListener(mChildOnCheckedChangeListener);
+			super.setOnCheckedChangeListener(mChildOnCheckedChangeListener);
 		}
 	}
 
@@ -860,6 +906,7 @@ public class SwitchButton extends CompoundButton {
 		mOffLayout = null;
 
 		requestLayout();
+		invalidate();
 	}
 
 
@@ -876,7 +923,9 @@ public class SwitchButton extends CompoundButton {
 	public void onRestoreInstanceState(Parcelable state) {
 		SavedState ss = (SavedState) state;
 		setText(ss.onText, ss.offText);
+		mRestoring = true;
 		super.onRestoreInstanceState(ss.getSuperState());
+		mRestoring = false;
 	}
 
 	static class SavedState extends BaseSavedState {
